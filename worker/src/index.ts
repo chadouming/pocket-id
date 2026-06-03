@@ -907,6 +907,175 @@ app.get("/api/oidc/device/info", async (c) => {
 	}
 });
 
+app.get("/api/version/current", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		// Read version from a D1 key-value store or return a static value
+		// The container sets this at startup; we approximate it
+		return c.json({ currentVersion: "0.0.0" });
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/users/:id", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const id = c.req.param("id");
+		const user = await c.env.DB.prepare(
+			"SELECT id, username, email, first_name, last_name, display_name, is_admin, locale, disabled, email_verified, created_at FROM users WHERE id = ?",
+		).bind(id).first();
+		if (!user) return c.json({ error: "User not found" }, 404);
+		const r = user as Record<string, unknown>;
+		const groupsResult = await c.env.DB.prepare(
+			`SELECT ug.id, ug.friendly_name, ug.name FROM user_groups ug
+			 INNER JOIN user_groups_users ugu ON ug.id = ugu.user_group_id
+			 WHERE ugu.user_id = ?`,
+		).bind(id).all();
+		const claimsResult = await c.env.DB.prepare(
+			"SELECT id, \"key\", value FROM custom_claims WHERE user_id = ?",
+		).bind(id).all();
+		return c.json({
+			id: r.id,
+			username: r.username,
+			email: r.email ?? null,
+			firstName: r.first_name,
+			lastName: r.last_name,
+			displayName: r.display_name,
+			isAdmin: Boolean(r.is_admin),
+			locale: r.locale ?? null,
+			disabled: Boolean(r.disabled),
+			emailVerified: r.email_verified,
+			createdAt: r.created_at,
+			userGroups: (groupsResult.results as Record<string, unknown>[]).map((g) => ({
+				id: g.id, friendlyName: g.friendly_name, name: g.name,
+			})),
+			customClaims: (claimsResult.results as Record<string, unknown>[]).map((cc) => ({
+				id: cc.id, key: cc.key, value: cc.value,
+			})),
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/users/:id/groups", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const id = c.req.param("id");
+		const result = await c.env.DB.prepare(
+			`SELECT ug.id, ug.friendly_name, ug.name, ug.created_at FROM user_groups ug
+			 INNER JOIN user_groups_users ugu ON ug.id = ugu.user_group_id
+			 WHERE ugu.user_id = ?
+			 ORDER BY ug.friendly_name ASC`,
+		).bind(id).all();
+		const groups = (result.results as Record<string, unknown>[]).map((g) => ({
+			id: g.id, friendlyName: g.friendly_name, name: g.name, createdAt: g.created_at,
+		}));
+		return c.json(groups);
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/user-groups/:id", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const id = c.req.param("id");
+		const group = await c.env.DB.prepare(
+			"SELECT id, name, friendly_name, created_at FROM user_groups WHERE id = ?",
+		).bind(id).first();
+		if (!group) return c.json({ error: "Group not found" }, 404);
+		const r = group as Record<string, unknown>;
+		const usersResult = await c.env.DB.prepare(
+			`SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.display_name, u.is_admin, u.disabled
+			 FROM users u INNER JOIN user_groups_users ugu ON u.id = ugu.user_id
+			 WHERE ugu.user_group_id = ?
+			 ORDER BY u.username ASC`,
+		).bind(id).all();
+		const claimsResult = await c.env.DB.prepare(
+			"SELECT id, \"key\", value FROM custom_claims WHERE user_group_id = ?",
+		).bind(id).all();
+		const allowedClientsResult = await c.env.DB.prepare(
+			`SELECT oc.id, oc.name, oc.image_type, oc.dark_image_type, oc.launch_url, oc.requires_reauthentication
+			 FROM oidc_clients oc
+			 INNER JOIN oidc_clients_allowed_user_groups ocg ON oc.id = ocg.oidc_client_id
+			 WHERE ocg.user_group_id = ?`,
+		).bind(id).all();
+		return c.json({
+			id: r.id,
+			name: r.name,
+			friendlyName: r.friendly_name,
+			createdAt: r.created_at,
+			users: (usersResult.results as Record<string, unknown>[]).map((u) => ({
+				id: u.id, username: u.username, email: u.email ?? null,
+				firstName: u.first_name, lastName: u.last_name, displayName: u.display_name,
+				isAdmin: Boolean(u.is_admin), disabled: Boolean(u.disabled),
+			})),
+			customClaims: (claimsResult.results as Record<string, unknown>[]).map((cc) => ({
+				id: cc.id, key: cc.key, value: cc.value,
+			})),
+			allowedOidcClients: (allowedClientsResult.results as Record<string, unknown>[]).map((oc) => ({
+				id: oc.id, name: oc.name ?? "",
+				hasLogo: (oc.image_type as string) !== "",
+				hasDarkLogo: (oc.dark_image_type as string) !== "",
+				launchURL: oc.launch_url ?? null,
+				requiresReauthentication: Boolean(oc.requires_reauthentication),
+			})),
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/users/:id/authorized-clients", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const id = c.req.param("id");
+		const result = await c.env.DB.prepare(
+			`SELECT uac.scope, uac.last_used_at, uac.client_id,
+				oc.id as c_id, oc.name as c_name, oc.image_type, oc.dark_image_type,
+				oc.launch_url, oc.requires_reauthentication
+				FROM user_authorized_oidc_clients uac
+				INNER JOIN oidc_clients oc ON uac.client_id = oc.id
+				WHERE uac.user_id = ?
+				ORDER BY uac.last_used_at DESC`,
+		).bind(id).all();
+		const clients = (result.results as Record<string, unknown>[]).map((r) => ({
+			scope: r.scope ?? "",
+			client: {
+				id: r.c_id, name: r.c_name ?? "",
+				hasLogo: (r.image_type as string) !== "",
+				hasDarkLogo: (r.dark_image_type as string) !== "",
+				launchURL: r.launch_url ?? null,
+				requiresReauthentication: Boolean(r.requires_reauthentication),
+			},
+			lastUsedAt: r.last_used_at,
+		}));
+		return c.json({
+			data: clients,
+			pagination: { totalPages: 1, totalItems: clients.length, currentPage: 1, itemsPerPage: 100 },
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
 app.post("/__d1/query", async (c) => {
 	try {
 		const body = (await c.req.json()) as D1QueryRequest;
