@@ -1,5 +1,6 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { Hono } from "hono";
+import { importJWK, jwtVerify, type JWTPayload } from "jose";
 
 export class PocketIDContainer extends Container<Env> {
 	defaultPort = 1411;
@@ -146,6 +147,58 @@ function normalizeParams(params: unknown[] | undefined): unknown[] {
 	});
 }
 
+// JWT verification cache
+let cachedJWKS: { keys: object[]; expiresAt: number } | null = null;
+
+const APP_URL = "https://authspot.net";
+
+async function verifyAccessToken(token: string): Promise<{ sub: string; isAdmin: boolean } | null> {
+	try {
+		const { payload } = await jwtVerify(token, async (header) => {
+			if (!cachedJWKS || Date.now() >= cachedJWKS.expiresAt) {
+				const resp = await fetch(`${APP_URL}/.well-known/jwks.json`);
+				if (!resp.ok) throw new Error(`JWKS fetch failed: ${resp.status}`);
+				const data = (await resp.json()) as { keys: object[] };
+				cachedJWKS = { keys: data.keys, expiresAt: Date.now() + 3600_000 };
+			}
+			const keyData = cachedJWKS.keys.find(
+				(k: Record<string, unknown>) => k.kid === header.kid,
+			);
+			if (!keyData) throw new Error("Unknown kid");
+			return await importJWK(keyData as jose.JWK, header.alg as string);
+		}, {
+			issuer: APP_URL,
+			audience: APP_URL,
+		});
+		if (payload.type !== "access-token") return null;
+		return {
+			sub: payload.sub!,
+			isAdmin: (payload as unknown as Record<string, unknown>).isAdmin === true,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function extractAccessToken(request: Request): string | null {
+	// Try cookie first
+	const cookies = request.headers.get("Cookie") || "";
+	for (const part of cookies.split(";")) {
+		const [name, ...rest] = part.trim().split("=");
+		if (
+			(name === "__Host-access_token" || name === "access_token") &&
+			rest.length > 0
+		) {
+			return rest.join("=");
+		}
+	}
+	// Fallback to Authorization header
+	const auth = request.headers.get("Authorization") || "";
+	const spaceIdx = auth.indexOf(" ");
+	if (spaceIdx > 0) return auth.slice(spaceIdx + 1);
+	return null;
+}
+
 const publicConfigKeys = new Set([
 	"appName",
 	"homePageUrl",
@@ -261,6 +314,159 @@ app.get("/api/oidc/clients/:id/meta", async (c) => {
 			hasDarkLogo: darkImageType !== "",
 			launchURL: r.launch_url ?? null,
 			requiresReauthentication: Boolean(r.requires_reauthentication),
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/users/me", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) {
+			return c.json({ error: "Not authenticated" }, 401);
+		}
+		const auth = await verifyAccessToken(token);
+		if (!auth) {
+			return c.json({ error: "Invalid token" }, 401);
+		}
+		const user = await c.env.DB.prepare(
+			"SELECT id, username, email, first_name, last_name, display_name, is_admin, locale, disabled, email_verified FROM users WHERE id = ?",
+		).bind(auth.sub).first();
+		if (!user) {
+			return c.json({ error: "User not found" }, 404);
+		}
+		const r = user as Record<string, unknown>;
+		// Load user groups
+		const groupsResult = await c.env.DB.prepare(
+			`SELECT ug.id, ug.friendly_name, ug.name FROM user_groups ug
+			 INNER JOIN user_groups_users ugu ON ug.id = ugu.user_group_id
+			 WHERE ugu.user_id = ?`,
+		).bind(auth.sub).all();
+		const groups = (groupsResult.results as Record<string, unknown>[]).map((g) => ({
+			id: g.id,
+			friendlyName: g.friendly_name,
+			name: g.name,
+		}));
+		// Load custom claims
+		const claimsResult = await c.env.DB.prepare(
+			"SELECT id, \"key\", value FROM custom_claims WHERE user_id = ?",
+		).bind(auth.sub).all();
+		const customClaims = (claimsResult.results as Record<string, unknown>[]).map((cc) => ({
+			id: cc.id,
+			key: cc.key,
+			value: cc.value,
+		}));
+		return c.json({
+			id: r.id,
+			username: r.username,
+			email: r.email,
+			firstName: r.first_name,
+			lastName: r.last_name,
+			displayName: r.display_name,
+			isAdmin: Boolean(r.is_admin),
+			locale: r.locale ?? null,
+			disabled: Boolean(r.disabled),
+			emailVerified: r.email_verified,
+			userGroups: groups,
+			customClaims,
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/webauthn/credentials", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		const result = await c.env.DB.prepare(
+			"SELECT id, name, credential_id, attestation_type, transport, backup_eligible, backup_state, created_at FROM webauthn_credentials WHERE user_id = ?",
+		).bind(auth.sub).all();
+		const credentials = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			name: r.name,
+			credentialID: r.credential_id,
+			attestationType: r.attestation_type,
+			transport: r.transport,
+			backupEligible: Boolean(r.backup_eligible),
+			backupState: Boolean(r.backup_state),
+			createdAt: r.created_at,
+		}));
+		return c.json(credentials);
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/users/me/authorized-clients", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		const result = await c.env.DB.prepare(
+			`SELECT uac.scope, uac.last_used_at, uac.client_id,
+				oc.id as c_id, oc.name as c_name, oc.image_type, oc.dark_image_type,
+				oc.launch_url, oc.requires_reauthentication
+				FROM user_authorized_oidc_clients uac
+				INNER JOIN oidc_clients oc ON uac.client_id = oc.id
+				WHERE uac.user_id = ?
+				ORDER BY uac.last_used_at DESC`,
+		).bind(auth.sub).all();
+		const clients = (result.results as Record<string, unknown>[]).map((r) => ({
+			scope: r.scope ?? "",
+			client: {
+				id: r.c_id,
+				name: r.c_name ?? "",
+				hasLogo: (r.image_type as string) !== "",
+				hasDarkLogo: (r.dark_image_type as string) !== "",
+				launchURL: r.launch_url ?? null,
+				requiresReauthentication: Boolean(r.requires_reauthentication),
+			},
+			lastUsedAt: r.last_used_at,
+		}));
+		return c.json({
+			data: clients,
+			pagination: {
+				totalPages: 1,
+				totalItems: clients.length,
+				currentPage: 1,
+				itemsPerPage: 100,
+			},
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/api-keys", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		const result = await c.env.DB.prepare(
+			"SELECT id, name, description, expires_at, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+		).bind(auth.sub).all();
+		const keys = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			name: r.name,
+			description: r.description ?? null,
+			expiresAt: r.expires_at,
+			lastUsedAt: r.last_used_at ?? null,
+			createdAt: r.created_at,
+		}));
+		return c.json({
+			data: keys,
+			pagination: {
+				totalPages: 1,
+				totalItems: keys.length,
+				currentPage: 1,
+				itemsPerPage: 100,
+			},
 		});
 	} catch {
 		// Fall through to container on error
