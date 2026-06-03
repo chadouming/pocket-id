@@ -1244,6 +1244,35 @@ app.get("/.well-known/openid-configuration", (_c) => {
 	});
 });
 
+// Image cache-forward: serve from Cache API, fall back to container
+async function cacheForward(c: any, cacheKey: string, ttlSeconds: number): Promise<Response> {
+	// Check cache first
+	const cache = caches.default;
+	const cachedResponse = await cache.match(cacheKey);
+	if (cachedResponse) {
+		return cachedResponse;
+	}
+	// Forward to container
+	const container = getContainer(c.env.POCKET_ID_CONTAINER);
+	const containerResp = await container.fetch(c.req.raw);
+	// Only cache successful image responses
+	if (containerResp.ok && containerResp.headers.get("content-type")?.startsWith("image/")) {
+		const responseToCache = new Response(containerResp.body, containerResp);
+		responseToCache.headers.set("Cache-Control", `public, max-age=${ttlSeconds}`);
+		c.waitUntil(cache.put(cacheKey, responseToCache.clone()));
+		return responseToCache;
+	}
+	return containerResp;
+}
+
+app.get("/api/application-images/logo", (c) => cacheForward(c, c.req.url, 86400));
+app.get("/api/application-images/email", (c) => cacheForward(c, c.req.url, 86400));
+app.get("/api/application-images/background", (c) => cacheForward(c, c.req.url, 86400));
+app.get("/api/application-images/favicon", (c) => cacheForward(c, c.req.url, 86400));
+app.get("/api/application-images/default-profile-picture", (c) => cacheForward(c, c.req.url, 86400));
+app.get("/api/oidc/clients/:id/logo", (c) => cacheForward(c, c.req.url, 43200));
+app.get("/api/users/:id/profile-picture.png", (c) => cacheForward(c, c.req.url, 3600));
+
 // API calls → container (static assets served by Worker Assets)
 app.all("/api/*", async (c) => {
 	const container = getContainer(c.env.POCKET_ID_CONTAINER);
