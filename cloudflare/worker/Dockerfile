@@ -1,25 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-ARG BUILD_TAGS=""
+ARG BUILD_TAGS="exclude_frontend"
 
-# Stage 1: Build Frontend
-FROM node:24-alpine AS frontend-builder
-RUN corepack enable
-
-WORKDIR /build
-
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY frontend/package.json ./frontend/
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-  pnpm --filter pocket-id-frontend install --frozen-lockfile
-
-COPY ./frontend ./frontend/
-
-RUN --mount=type=cache,target=/build/frontend/node_modules/.vite \
-  --mount=type=cache,target=/build/frontend/.svelte-kit \
-  BUILD_OUTPUT_PATH=dist pnpm --filter pocket-id-frontend run build
-
-# Stage 2: Build Backend
+# Stage 1: Build Backend (API-only, no frontend)
 FROM golang:1.26-alpine AS backend-builder
 ARG BUILD_TAGS
 WORKDIR /build
@@ -28,7 +11,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   go mod download
 
 COPY ./backend ./
-COPY --from=frontend-builder /build/frontend/dist ./frontend/dist
+RUN mkdir -p frontend/dist
 COPY .version .version
 
 WORKDIR /build/cmd
@@ -45,7 +28,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o /build/pocket-id \
     .
 
-# Stage 3: Minimal production image
+# Stage 2: Minimal production image
 FROM alpine:3.23.4
 WORKDIR /app
 

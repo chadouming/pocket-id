@@ -7,10 +7,14 @@
 	"observability": {
 		"enabled": true
 	},
+	"assets": {
+		"directory": "cloudflare/assets",
+		"not_found_handling": "single-page-application"
+	},
 	"containers": [
 		{
 			"class_name": "PocketIDContainer",
-			"image": "registry.cloudflare.com/4e6b9b8682983b9cb3e780cd67877f9e/pocket-id-pocketidcontainer:v2.9.2",
+			"image": "registry.cloudflare.com/4e6b9b8682983b9cb3e780cd67877f9e/pocket-id-pocketidcontainer:v3.0.0",
 			"max_instances": 2,
 			"instance_type": "lite"
 		}

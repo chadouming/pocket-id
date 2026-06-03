@@ -1,0 +1,1 @@
+import{n as e}from"../chunks/Bhgu_XkC.js";import{n as t}from"../chunks/BKLaKkDZ2.js";var n=e({load:()=>r}),r=async({url:e})=>{let n=`/login/alternative/code`;return e.searchParams.has(`redirect`)&&(n+=`?redirect=${encodeURIComponent(e.searchParams.get(`redirect`))}`),t(307,n)};export{n as universal};

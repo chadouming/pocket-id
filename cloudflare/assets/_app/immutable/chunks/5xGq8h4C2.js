@@ -1,0 +1,1 @@
+import{n as e}from"./CiT0d24v.js";var t=class{api=e.create({baseURL:`/api`});constructor(){typeof process<`u`&&{}?.DEVELOPMENT_BACKEND_URL&&(this.api.defaults.baseURL={}.DEVELOPMENT_BACKEND_URL)}};export{t};

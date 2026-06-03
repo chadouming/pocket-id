@@ -350,7 +350,13 @@ app.get("/.well-known/openid-configuration", (_c) => {
 	});
 });
 
-app.all("*", async (c) => {
+// API calls → container (static assets served by Worker Assets)
+app.all("/api/*", async (c) => {
+	const container = getContainer(c.env.POCKET_ID_CONTAINER);
+	return await container.fetch(c.req.raw);
+});
+
+app.all("/.well-known/*", async (c) => {
 	const container = getContainer(c.env.POCKET_ID_CONTAINER);
 	return await container.fetch(c.req.raw);
 });

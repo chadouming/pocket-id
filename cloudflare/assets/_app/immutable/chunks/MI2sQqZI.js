@@ -1,0 +1,1 @@
+import{a as e,o as t}from"./Bj4g1Qzb.js";import"./BEDIq91W.js";import{t as n}from"./Dbndk1IJ.js";function r(r,i){let a=e(i,[`$$slots`,`$$events`,`$$legacy`]),o=[[`rect`,{width:`20`,height:`12`,x:`2`,y:`6`,rx:`2`}],[`path`,{d:`M12 12h.01`}],[`path`,{d:`M17 12h.01`}],[`path`,{d:`M7 12h.01`}]];n(r,t({name:`rectangle-ellipsis`},()=>a,{get iconNode(){return o}}))}export{r as t};

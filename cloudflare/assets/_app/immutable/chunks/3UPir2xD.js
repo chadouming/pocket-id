@@ -1,0 +1,1 @@
+import{r as e,t}from"./9MBvwedS.js";import"./CYbm6wl32.js";var n=n=>{let r;return t(e=>{e.from&&(r=e.from.url)}),{go:()=>{r&&r.pathname===n?window.history.back():e(n)}}};export{n as t};

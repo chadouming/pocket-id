@@ -1,0 +1,1 @@
+import{n as e}from"../chunks/Bhgu_XkC.js";import{n as t}from"../chunks/BKLaKkDZ2.js";var n=e({load:()=>r}),r=async()=>t(307,`/signup/setup`);export{n as universal};

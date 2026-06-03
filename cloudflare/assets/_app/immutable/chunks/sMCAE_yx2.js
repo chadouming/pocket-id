@@ -1,0 +1,1 @@
+import{t as e}from"./bpJfAMyS.js";import{n as t,r as n,t as r}from"./D7Xi5A7_.js";import{t as i}from"./QPcZwjUl.js";var a={code:`en-IE`,formatDistance:e,formatLong:i,formatRelative:n,localize:t,match:r,options:{weekStartsOn:1,firstWeekContainsDate:4}};export{a as enIE};

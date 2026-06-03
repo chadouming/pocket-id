@@ -1,0 +1,1 @@
+async function e(e){try{return{data:await e,error:null}}catch(e){return{data:null,error:e}}}export{e as t};
