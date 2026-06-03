@@ -199,6 +199,37 @@ function extractAccessToken(request: Request): string | null {
 	return null;
 }
 
+interface ListOptions {
+	page: number;
+	limit: number;
+	sortColumn: string;
+	sortDirection: string;
+	search: string;
+}
+
+function parseListOptions(url: string): ListOptions {
+	const u = new URL(url);
+	return {
+		page: Math.max(1, parseInt(u.searchParams.get("pagination[page]") || "1")),
+		limit: Math.min(100, Math.max(1, parseInt(u.searchParams.get("pagination[limit]") || "20"))),
+		sortColumn: u.searchParams.get("sort[column]") || "",
+		sortDirection: (u.searchParams.get("sort[direction]") || "asc").toLowerCase() === "desc" ? "DESC" : "ASC",
+		search: u.searchParams.get("search") || "",
+	};
+}
+
+function paginatedResponse(data: unknown[], totalItems: number, opts: ListOptions) {
+	return {
+		data,
+		pagination: {
+			totalPages: Math.ceil(totalItems / opts.limit) || 1,
+			totalItems,
+			currentPage: opts.page,
+			itemsPerPage: opts.limit,
+		},
+	};
+}
+
 const publicConfigKeys = new Set([
 	"appName",
 	"homePageUrl",
@@ -467,6 +498,409 @@ app.get("/api/api-keys", async (c) => {
 				currentPage: 1,
 				itemsPerPage: 100,
 			},
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+// Simple no-auth endpoints
+app.get("/api/signup/setup", async (c) => {
+	try {
+		const result = await c.env.DB.prepare(
+			"SELECT COUNT(*) as cnt FROM users WHERE id != 'static-api-key-user'",
+		).first();
+		const count = (result as Record<string, unknown>)?.cnt as number;
+		return c.json({ completed: count > 0 });
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/custom-claims/suggestions", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const result = await c.env.DB.prepare(
+			"SELECT \"key\", COUNT(*) as count FROM custom_claims GROUP BY \"key\" ORDER BY count DESC",
+		).all();
+		const suggestions = (result.results as Record<string, unknown>[]).map((r) => ({
+			key: r.key,
+			count: Number(r.count),
+		}));
+		return c.json(suggestions);
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/audit-logs/filters/users", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const result = await c.env.DB.prepare(
+			`SELECT DISTINCT u.id, u.username FROM users u
+			 INNER JOIN audit_logs al ON u.id = al.user_id
+			 ORDER BY u.username`,
+		).all();
+		return c.json((result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			username: r.username,
+		})));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/audit-logs/filters/client-names", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const result = await c.env.DB.prepare(
+			"SELECT DISTINCT json_extract(data, '$.clientName') as name FROM audit_logs WHERE json_extract(data, '$.clientName') IS NOT NULL ORDER BY name",
+		).all();
+		return c.json((result.results as Record<string, unknown>[]).map((r) => r.name));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+// Paginated admin endpoints
+app.get("/api/users", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const opts = parseListOptions(c.req.url);
+		const offset = (opts.page - 1) * opts.limit;
+		const where = opts.search
+			? `WHERE (u.username LIKE ? OR u.email LIKE ? OR u.first_name LIKE ? OR u.last_name LIKE ?)`
+			: "";
+		const searchParam = opts.search ? `%${opts.search}%` : "";
+		const countResult = await c.env.DB.prepare(
+			`SELECT COUNT(*) as cnt FROM users u ${where}`,
+		).bind(...(opts.search ? [searchParam, searchParam, searchParam, searchParam] : [])).first();
+		const totalItems = (countResult as Record<string, unknown>)?.cnt as number;
+		const sortCol = ["username", "email", "first_name", "last_name", "created_at", "is_admin", "disabled"].includes(opts.sortColumn)
+			? `u.${opts.sortColumn}` : "u.username";
+		const result = await c.env.DB.prepare(
+			`SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.display_name, u.is_admin, u.locale, u.disabled, u.email_verified, u.created_at
+			 FROM users u ${where}
+			 ORDER BY ${sortCol} ${opts.sortDirection}
+			 LIMIT ? OFFSET ?`,
+		).bind(...(opts.search ? [searchParam, searchParam, searchParam, searchParam] : []), opts.limit, offset).all();
+		const users = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			username: r.username,
+			email: r.email ?? null,
+			firstName: r.first_name,
+			lastName: r.last_name,
+			displayName: r.display_name,
+			isAdmin: Boolean(r.is_admin),
+			locale: r.locale ?? null,
+			disabled: Boolean(r.disabled),
+			emailVerified: r.email_verified,
+			createdAt: r.created_at,
+		}));
+		return c.json(paginatedResponse(users, totalItems, opts));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/user-groups", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const opts = parseListOptions(c.req.url);
+		const offset = (opts.page - 1) * opts.limit;
+		const where = opts.search
+			? `WHERE (ug.name LIKE ? OR ug.friendly_name LIKE ?)`
+			: "";
+		const searchParam = opts.search ? `%${opts.search}%` : [];
+		const countResult = await c.env.DB.prepare(
+			`SELECT COUNT(*) as cnt FROM user_groups ug ${where}`,
+		).bind(...(opts.search ? [searchParam, searchParam] : [])).first();
+		const totalItems = (countResult as Record<string, unknown>)?.cnt as number;
+		const sortCol = ["name", "friendly_name", "created_at"].includes(opts.sortColumn)
+			? `ug.${opts.sortColumn}` : "ug.friendly_name";
+		const result = await c.env.DB.prepare(
+			`SELECT ug.id, ug.name, ug.friendly_name, ug.created_at
+			 FROM user_groups ug ${where}
+			 ORDER BY ${sortCol} ${opts.sortDirection}
+			 LIMIT ? OFFSET ?`,
+		).bind(...(opts.search ? [searchParam, searchParam] : []), opts.limit, offset).all();
+		const groupIds = (result.results as Record<string, unknown>[]).map((r) => r.id as string);
+		// Get user counts for each group
+		const groups = await Promise.all(groupIds.map(async (id) => {
+			const row = result.results.find((r) => (r as Record<string, unknown>).id === id) as Record<string, unknown>;
+			const countR = await c.env.DB.prepare(
+				"SELECT COUNT(*) as cnt FROM user_groups_users WHERE user_group_id = ?",
+			).bind(id).first();
+			return {
+				id: row.id,
+				name: row.name,
+				friendlyName: row.friendly_name,
+				createdAt: row.created_at,
+				userCount: Number((countR as Record<string, unknown>)?.cnt ?? 0),
+			};
+		}));
+		return c.json(paginatedResponse(groups, totalItems, opts));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/clients", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const opts = parseListOptions(c.req.url);
+		const offset = (opts.page - 1) * opts.limit;
+		const where = opts.search ? `WHERE oc.name LIKE ?` : "";
+		const searchParam = opts.search ? `%${opts.search}%` : [];
+		const countResult = await c.env.DB.prepare(
+			`SELECT COUNT(*) as cnt FROM oidc_clients oc ${where}`,
+		).bind(...(opts.search ? [searchParam] : [])).first();
+		const totalItems = (countResult as Record<string, unknown>)?.cnt as number;
+		const sortCol = ["name", "created_at", "pkce_enabled", "requires_reauthentication", "requires_pushed_authorization_requests", "is_group_restricted"].includes(opts.sortColumn)
+			? `oc.${opts.sortColumn}` : "oc.name";
+		const result = await c.env.DB.prepare(
+			`SELECT oc.id, oc.name, oc.image_type, oc.dark_image_type, oc.is_public, oc.pkce_enabled,
+				oc.requires_reauthentication, oc.requires_pushed_authorization_requests, oc.is_group_restricted,
+				oc.launch_url, oc.created_at
+			 FROM oidc_clients oc ${where}
+			 ORDER BY ${sortCol} ${opts.sortDirection}
+			 LIMIT ? OFFSET ?`,
+		).bind(...(opts.search ? [searchParam] : []), opts.limit, offset).all();
+		const clientIds = (result.results as Record<string, unknown>[]).map((r) => r.id as string);
+		const clients = await Promise.all(clientIds.map(async (id) => {
+			const row = result.results.find((r) => (r as Record<string, unknown>).id === id) as Record<string, unknown>;
+			const countR = await c.env.DB.prepare(
+				"SELECT COUNT(*) as cnt FROM oidc_clients_allowed_user_groups WHERE oidc_client_id = ?",
+			).bind(id).first();
+			return {
+				id: row.id,
+				name: row.name ?? "",
+				hasLogo: (row.image_type as string) !== "",
+				hasDarkLogo: (row.dark_image_type as string) !== "",
+				isPublic: Boolean(row.is_public),
+				pkceEnabled: Boolean(row.pkce_enabled),
+				requiresReauthentication: Boolean(row.requires_reauthentication),
+				requiresPushedAuthorizationRequests: Boolean(row.requires_pushed_authorization_requests),
+				isGroupRestricted: Boolean(row.is_group_restricted),
+				launchURL: row.launch_url ?? null,
+				createdAt: row.created_at,
+				allowedGroupsCount: Number((countR as Record<string, unknown>)?.cnt ?? 0),
+			};
+		}));
+		return c.json(paginatedResponse(clients, totalItems, opts));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/clients/:id", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const id = c.req.param("id");
+		const result = await c.env.DB.prepare(
+			`SELECT oc.*,
+				COALESCE(u.username, '') as created_by_name
+			 FROM oidc_clients oc
+			 LEFT JOIN users u ON oc.created_by_id = u.id
+			 WHERE oc.id = ?`,
+		).bind(id).first();
+		if (!result) return c.json({ error: "Client not found" }, 404);
+		const r = result as Record<string, unknown>;
+		// Get allowed user groups
+		const groupsResult = await c.env.DB.prepare(
+			`SELECT ug.id, ug.friendly_name, ug.name
+			 FROM user_groups ug
+			 INNER JOIN oidc_clients_allowed_user_groups ocg ON ug.id = ocg.user_group_id
+			 WHERE ocg.oidc_client_id = ?`,
+		).bind(id).all();
+		const allowedUserGroups = (groupsResult.results as Record<string, unknown>[]).map((g) => ({
+			id: g.id,
+			friendlyName: g.friendly_name,
+			name: g.name,
+		}));
+		return c.json({
+			id: r.id,
+			name: r.name ?? "",
+			hasLogo: (r.image_type as string) !== "",
+			hasDarkLogo: (r.dark_image_type as string) !== "",
+			callbackURLs: JSON.parse((r.callback_urls as string) || "[]"),
+			logoutCallbackURLs: JSON.parse((r.logout_callback_urls as string) || "[]"),
+			isPublic: Boolean(r.is_public),
+			pkceEnabled: Boolean(r.pkce_enabled),
+			requiresReauthentication: Boolean(r.requires_reauthentication),
+			requiresPushedAuthorizationRequests: Boolean(r.requires_pushed_authorization_requests),
+			launchURL: r.launch_url ?? null,
+			isGroupRestricted: Boolean(r.is_group_restricted),
+			createdAt: r.created_at,
+			createdByName: r.created_by_name || null,
+			allowedUserGroups,
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/audit-logs", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		const opts = parseListOptions(c.req.url);
+		const offset = (opts.page - 1) * opts.limit;
+		const u = new URL(c.req.url);
+		const filters: string[] = [];
+		const params: unknown[] = [];
+		// User-scoped: only show logs for the current user
+		filters.push("al.user_id = ?");
+		params.push(auth.sub);
+		const eventFilter = u.searchParams.get("filters[event]");
+		if (eventFilter) { filters.push("al.event = ?"); params.push(eventFilter); }
+		const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+		const sortCol = ["created_at", "event", "country", "city"].includes(opts.sortColumn)
+			? `al.${opts.sortColumn}` : "al.created_at";
+		const countResult = await c.env.DB.prepare(
+			`SELECT COUNT(*) as cnt FROM audit_logs al ${where}`,
+		).bind(...params).first();
+		const totalItems = (countResult as Record<string, unknown>)?.cnt as number;
+		const result = await c.env.DB.prepare(
+			`SELECT al.id, al.created_at, al.event, al.ip_address, al.user_agent, al.data, al.country, al.city, al.user_id
+			 FROM audit_logs al ${where}
+			 ORDER BY ${sortCol} ${opts.sortDirection}
+			 LIMIT ? OFFSET ?`,
+		).bind(...params, opts.limit, offset).all();
+		const logs = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			createdAt: r.created_at,
+			event: r.event,
+			ipAddress: r.ip_address ?? null,
+			userAgent: r.user_agent,
+			data: typeof r.data === "string" ? JSON.parse(r.data) : r.data,
+			country: r.country ?? null,
+			city: r.city ?? null,
+			userId: r.user_id,
+		}));
+		return c.json(paginatedResponse(logs, totalItems, opts));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/audit-logs/all", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const opts = parseListOptions(c.req.url);
+		const offset = (opts.page - 1) * opts.limit;
+		const u = new URL(c.req.url);
+		const filters: string[] = [];
+		const params: unknown[] = [];
+		const eventFilter = u.searchParams.get("filters[event]");
+		if (eventFilter) { filters.push("al.event = ?"); params.push(eventFilter); }
+		const userIdFilter = u.searchParams.get("filters[userID]");
+		if (userIdFilter) { filters.push("al.user_id = ?"); params.push(userIdFilter); }
+		const clientNameFilter = u.searchParams.get("filters[clientName]");
+		if (clientNameFilter) { filters.push("json_extract(al.data, '$.clientName') = ?"); params.push(clientNameFilter); }
+		const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+		const sortCol = ["created_at", "event", "country", "city"].includes(opts.sortColumn)
+			? `al.${opts.sortColumn}` : "al.created_at";
+		const countResult = await c.env.DB.prepare(
+			`SELECT COUNT(*) as cnt FROM audit_logs al ${where}`,
+		).bind(...params).first();
+		const totalItems = (countResult as Record<string, unknown>)?.cnt as number;
+		const result = await c.env.DB.prepare(
+			`SELECT al.id, al.created_at, al.event, al.ip_address, al.user_agent, al.data, al.country, al.city, al.user_id
+			 FROM audit_logs al ${where}
+			 ORDER BY ${sortCol} ${opts.sortDirection}
+			 LIMIT ? OFFSET ?`,
+		).bind(...params, opts.limit, offset).all();
+		const logs = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			createdAt: r.created_at,
+			event: r.event,
+			ipAddress: r.ip_address ?? null,
+			userAgent: r.user_agent,
+			data: typeof r.data === "string" ? JSON.parse(r.data) : r.data,
+			country: r.country ?? null,
+			city: r.city ?? null,
+			userId: r.user_id,
+		}));
+		return c.json(paginatedResponse(logs, totalItems, opts));
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/signup-tokens", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		const result = await c.env.DB.prepare(
+			"SELECT id, created_at, token, expires_at, usage_limit, usage_count FROM signup_tokens ORDER BY created_at DESC",
+		).all();
+		const tokens = (result.results as Record<string, unknown>[]).map((r) => ({
+			id: r.id,
+			createdAt: r.created_at,
+			token: r.token,
+			expiresAt: r.expires_at,
+			usageLimit: r.usage_limit,
+			usageCount: r.usage_count,
+		}));
+		return c.json({
+			data: tokens,
+			pagination: { totalPages: 1, totalItems: tokens.length, currentPage: 1, itemsPerPage: 100 },
+		});
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/device/info", async (c) => {
+	try {
+		const token = extractAccessToken(c.req.raw);
+		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		const auth = await verifyAccessToken(token);
+		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		const u = new URL(c.req.url);
+		const deviceCode = u.searchParams.get("device_code");
+		if (!deviceCode) return c.json({ error: "Missing device_code" }, 400);
+		const result = await c.env.DB.prepare(
+			`SELECT dc.*, oc.name as client_name, oc.launch_url as client_launch_url
+			 FROM device_codes dc
+			 INNER JOIN oidc_clients oc ON dc.client_id = oc.id
+			 WHERE dc.code = ? AND dc.user_id = ?`,
+		).bind(deviceCode, auth.sub).first();
+		if (!result) return c.json({ error: "Device code not found" }, 404);
+		const r = result as Record<string, unknown>;
+		return c.json({
+			clientName: r.client_name,
+			clientLaunchURL: r.client_launch_url ?? null,
+			status: r.status,
 		});
 	} catch {
 		// Fall through to container on error
