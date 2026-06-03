@@ -155,7 +155,7 @@ func (s *ImportService) resetSchema(targetVersion uint) error {
 		return fmt.Errorf("failed to get migrate instance: %w", err)
 	}
 
-	if s.db.Name() == "sqlite" {
+	if s.db.Name() == "sqlite" || s.db.Name() == "d1" {
 		s.db.Exec("PRAGMA foreign_keys = OFF;")
 	}
 
@@ -164,7 +164,7 @@ func (s *ImportService) resetSchema(targetVersion uint) error {
 		return fmt.Errorf("failed to drop existing schema: %w", err)
 	}
 
-	if s.db.Name() == "sqlite" {
+	if s.db.Name() == "sqlite" || s.db.Name() == "d1" {
 		defer s.db.Exec("PRAGMA foreign_keys = ON;")
 	}
 

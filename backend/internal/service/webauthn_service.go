@@ -126,11 +126,19 @@ func (s *WebAuthnService) VerifyRegistration(ctx context.Context, sessionID stri
 	var storedSession model.WebauthnSession
 	err := tx.
 		WithContext(ctx).
-		Clauses(clause.Returning{}).
-		Delete(&storedSession, "id = ?", sessionID).
+		Where("id = ?", sessionID).
+		First(&storedSession).
 		Error
 	if err != nil {
 		return model.WebauthnCredential{}, fmt.Errorf("failed to load WebAuthn session: %w", err)
+	}
+
+	err = tx.
+		WithContext(ctx).
+		Delete(&model.WebauthnSession{}, "id = ?", sessionID).
+		Error
+	if err != nil {
+		return model.WebauthnCredential{}, fmt.Errorf("failed to delete WebAuthn session: %w", err)
 	}
 
 	session := webauthn.SessionData{

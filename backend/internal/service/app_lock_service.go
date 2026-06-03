@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -82,14 +83,18 @@ func (s *AppLockService) Acquire(ctx context.Context, force bool) (waitUntil tim
 	}()
 
 	var prevLockRaw string
-	err = tx.
+	lockQuery := tx.
 		WithContext(ctx).
 		Model(&model.KV{}).
 		Where("key = ?", lockKey).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Select("value").
-		Scan(&prevLockRaw).
-		Error
+		Select("value")
+
+	// D1 doesn't support SELECT ... FOR UPDATE
+	if common.EnvConfig.DbProvider != common.DbProviderD1 {
+		lockQuery = lockQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+
+	err = lockQuery.Scan(&prevLockRaw).Error
 	if err != nil {
 		return time.Time{}, fmt.Errorf("query existing lock: %w", err)
 	}
@@ -118,7 +123,7 @@ func (s *AppLockService) Acquire(ctx context.Context, force bool) (waitUntil tim
 
 	var query string
 	switch s.db.Name() {
-	case "sqlite":
+	case "sqlite", "d1":
 		query = `
 			INSERT INTO kv (key, value)
 			VALUES (?, ?)
@@ -196,7 +201,7 @@ func (s *AppLockService) Release(ctx context.Context) error {
 
 	var query string
 	switch s.db.Name() {
-	case "sqlite":
+	case "sqlite", "d1":
 		query = `
 DELETE FROM kv
 WHERE key = ?
@@ -265,7 +270,7 @@ func (s *AppLockService) renew(ctx context.Context) error {
 
 		var query string
 		switch s.db.Name() {
-		case "sqlite":
+		case "sqlite", "d1":
 			query = `
 UPDATE kv
 SET value = ?

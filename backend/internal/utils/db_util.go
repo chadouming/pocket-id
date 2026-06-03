@@ -20,7 +20,7 @@ func DBTableExists(db *gorm.DB, tableName string) (exists bool, err error) {
 		if err != nil {
 			return false, err
 		}
-	case "sqlite":
+	case "sqlite", "d1":
 		query := `SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?`
 		err = db.Raw(query, tableName).Scan(&exists).Error
 		if err != nil {
@@ -75,7 +75,7 @@ func LoadDBSchemaTypes(db *gorm.DB) (result DBSchemaTypes, err error) {
 			}
 		}
 
-	case "sqlite":
+	case "sqlite", "d1":
 		var tables []string
 		err = db.
 			Raw(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`).

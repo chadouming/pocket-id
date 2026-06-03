@@ -33,7 +33,7 @@ func (date *DateTime) Scan(value any) (err error) {
 }
 
 func (date DateTime) Value() (driver.Value, error) {
-	if common.EnvConfig.DbProvider == common.DbProviderSqlite {
+	if common.EnvConfig.DbProvider == common.DbProviderSqlite || common.EnvConfig.DbProvider == common.DbProviderD1 {
 		return time.Time(date).Unix(), nil
 	} else {
 		return time.Time(date), nil

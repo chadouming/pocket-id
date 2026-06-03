@@ -1,0 +1,49 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pocket-id",
+	"main": "worker/src/index.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+		{
+			"class_name": "PocketIDContainer",
+			"image": "registry.cloudflare.com/4e6b9b8682983b9cb3e780cd67877f9e/pocket-id-pocketidcontainer:v2.9.2",
+			"max_instances": 2,
+			"instance_type": "lite"
+		}
+	],
+	"vars": {
+		"CLOUDFLARE_ACCOUNT_ID": "4e6b9b8682983b9cb3e780cd67877f9e"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "pocket-id",
+			"database_id": "d389067b-a9f6-4886-bd06-c681bffc774d"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "PocketIDContainer",
+				"name": "POCKET_ID_CONTAINER"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"new_sqlite_classes": ["PocketIDContainer"],
+			"tag": "v1"
+		}
+	],
+	"upload_source_maps": true,
+	"routes": [
+		{
+			"pattern": "authspot.net/*",
+			"zone_name": "authspot.net"
+		}
+	]
+}

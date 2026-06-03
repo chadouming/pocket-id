@@ -215,7 +215,7 @@ func isRootPath(path string) bool {
 func addPathPrefixClause(dialect string, query *gorm.DB, prefix string) *gorm.DB {
 	// In SQLite, we use "GLOB" which can use the index
 	switch dialect {
-	case "sqlite":
+	case "sqlite", "d1":
 		return query.Where("path GLOB ?", prefix+"*")
 	case "postgres":
 		return query.Where("path LIKE ?", prefix+"%")

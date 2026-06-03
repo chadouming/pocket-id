@@ -15,6 +15,13 @@ import (
 	"github.com/pocket-id/pocket-id/backend/resources"
 )
 
+func getMigrationPath() string {
+	if common.EnvConfig.DbProvider == common.DbProviderD1 {
+		return "migrations/sqlite"
+	}
+	return "migrations/" + string(common.EnvConfig.DbProvider)
+}
+
 // MigrateDatabase applies database migrations using embedded migration files or fetches them from GitHub if a downgrade is detected.
 func MigrateDatabase(sqlDb *sql.DB) error {
 	m, err := GetEmbeddedMigrateInstance(sqlDb)
@@ -22,13 +29,13 @@ func MigrateDatabase(sqlDb *sql.DB) error {
 		return fmt.Errorf("failed to get migrate instance: %w", err)
 	}
 
-	path := "migrations/" + string(common.EnvConfig.DbProvider)
+	path := getMigrationPath()
 	requiredVersion, err := getRequiredMigrationVersion(path)
 	if err != nil {
 		return fmt.Errorf("failed to get last migration version: %w", err)
 	}
 
-	currentVersion, _, _ := m.Version()
+	currentVersion, dirty, _ := m.Version()
 	if currentVersion > requiredVersion {
 		slog.Warn("Database version is newer than the application supports, possible downgrade detected", slog.Uint64("db_version", uint64(currentVersion)), slog.Uint64("app_version", uint64(requiredVersion)))
 		if !common.EnvConfig.AllowDowngrade {
@@ -36,6 +43,19 @@ func MigrateDatabase(sqlDb *sql.DB) error {
 		}
 		slog.Info("Fetching migrations from GitHub to handle possible downgrades")
 		return migrateDatabaseFromGitHub(sqlDb, requiredVersion, currentVersion)
+	}
+
+	// If already at the required version, skip migrations entirely
+	// This handles the case where the database is dirty from a failed migration
+	// that was already applied (common with D1 where transactions are no-ops)
+	if currentVersion == requiredVersion {
+		if dirty {
+			slog.Warn("Database is at required version but marked dirty, forcing clean state", slog.Uint64("version", uint64(requiredVersion)))
+			if err := m.Force(int(requiredVersion)); err != nil { //nolint:gosec
+				return fmt.Errorf("failed to force migration version: %w", err)
+			}
+		}
+		return nil
 	}
 
 	err = m.Migrate(requiredVersion)
@@ -53,7 +73,7 @@ func MigrateDatabase(sqlDb *sql.DB) error {
 
 // GetEmbeddedMigrateInstance creates a migrate.Migrate instance using embedded migration files.
 func GetEmbeddedMigrateInstance(sqlDb *sql.DB) (*migrate.Migrate, error) {
-	path := "migrations/" + string(common.EnvConfig.DbProvider)
+	path := getMigrationPath()
 	source, err := iofs.New(resources.FS, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedded migration source: %w", err)
@@ -74,7 +94,7 @@ func GetEmbeddedMigrateInstance(sqlDb *sql.DB) (*migrate.Migrate, error) {
 // newMigrationDriver creates a database.Driver instance based on the given database provider.
 func newMigrationDriver(sqlDb *sql.DB, dbProvider common.DbProvider) (driver database.Driver, err error) {
 	switch dbProvider {
-	case common.DbProviderSqlite:
+	case common.DbProviderSqlite, common.DbProviderD1:
 		driver, err = sqliteMigrate.WithInstance(sqlDb, &sqliteMigrate.Config{
 			NoTxWrap: true,
 		})
@@ -93,7 +113,11 @@ func newMigrationDriver(sqlDb *sql.DB, dbProvider common.DbProvider) (driver dat
 
 // migrateDatabaseFromGitHub applies database migrations fetched from GitHub to handle downgrades.
 func migrateDatabaseFromGitHub(sqlDb *sql.DB, requiredVersion uint, currentVersion uint) error {
-	srcURL := "github://pocket-id/pocket-id/backend/resources/migrations/" + string(common.EnvConfig.DbProvider)
+	dbProvider := string(common.EnvConfig.DbProvider)
+	if common.EnvConfig.DbProvider == common.DbProviderD1 {
+		dbProvider = "sqlite"
+	}
+	srcURL := "github://pocket-id/pocket-id/backend/resources/migrations/" + dbProvider
 
 	driver, err := newMigrationDriver(sqlDb, common.EnvConfig.DbProvider)
 	if err != nil {

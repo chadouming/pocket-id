@@ -31,6 +31,7 @@ const (
 	AppEnvTest              AppEnv     = "test"
 	DbProviderSqlite        DbProvider = "sqlite"
 	DbProviderPostgres      DbProvider = "postgres"
+	DbProviderD1            DbProvider = "d1"
 	MaxMindGeoLiteCityUrl   string     = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=%s&suffix=tar.gz"
 	defaultSqliteConnString string     = "data/pocket-id.db"
 	defaultFsUploadPath     string     = "data/uploads"
@@ -63,6 +64,8 @@ type EnvConfigSchema struct {
 	S3SecretAccessKey               string `env:"S3_SECRET_ACCESS_KEY" options:"file"`
 	S3ForcePathStyle                bool   `env:"S3_FORCE_PATH_STYLE"`
 	S3DisableDefaultIntegrityChecks bool   `env:"S3_DISABLE_DEFAULT_INTEGRITY_CHECKS"`
+
+	CFEmailEnabled bool `env:"CF_EMAIL_ENABLED"`
 
 	Port            string `env:"PORT"`
 	Host            string `env:"HOST" options:"toLower"`
@@ -180,6 +183,8 @@ func prepareDbConfig(config *EnvConfigSchema) {
 		config.DbConnectionString = defaultSqliteConnString
 	case strings.HasPrefix(config.DbConnectionString, "postgres://") || strings.HasPrefix(config.DbConnectionString, "postgresql://"):
 		config.DbProvider = DbProviderPostgres
+	case strings.HasPrefix(config.DbConnectionString, "d1://"):
+		config.DbProvider = DbProviderD1
 	default:
 		config.DbProvider = DbProviderSqlite
 	}

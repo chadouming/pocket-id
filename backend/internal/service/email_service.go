@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	htemplate "html/template"
 	"io"
 	"mime/multipart"
 	"mime/quotedprintable"
+	"net/http"
 	"net/textproto"
 	"os"
 	"strings"
@@ -80,6 +82,18 @@ func SendEmail[V any](ctx context.Context, srv *EmailService, toEmail email.Addr
 		AppName: dbConfig.AppName.Value,
 		LogoURL: common.EnvConfig.AppURL + "/api/application-images/email",
 		Data:    tData,
+	}
+
+	// Use Cloudflare Email Service if enabled
+	if common.EnvConfig.CFEmailEnabled {
+		var htmlBuf, textBuf bytes.Buffer
+		if err := email.GetTemplate(srv.htmlTemplates, template).ExecuteTemplate(&htmlBuf, "root", data); err != nil {
+			return fmt.Errorf("render html template: %w", err)
+		}
+		if err := email.GetTemplate(srv.textTemplates, template).ExecuteTemplate(&textBuf, "root", data); err != nil {
+			return fmt.Errorf("render text template: %w", err)
+		}
+		return sendViaCloudflare(ctx, srv, toEmail, template.Title(data), htmlBuf.String(), textBuf.String())
 	}
 
 	body, boundary, err := prepareBody(srv, template, data)
@@ -153,6 +167,71 @@ func SendEmail[V any](ctx context.Context, srv *EmailService, toEmail email.Addr
 	err = srv.sendEmailContent(client, toEmail, c)
 	if err != nil {
 		return fmt.Errorf("send email content: %w", err)
+	}
+
+	return nil
+}
+
+type cfEmailRequest struct {
+	To       string `json:"to"`
+	ToName   string `json:"toName,omitempty"`
+	From     string `json:"from"`
+	FromName string `json:"fromName,omitempty"`
+	Subject  string `json:"subject"`
+	HTML     string `json:"html"`
+	Text     string `json:"text"`
+}
+
+func sendViaCloudflare(ctx context.Context, srv *EmailService, toEmail email.Address, subject, htmlBody, textBody string) error {
+	dbConfig := srv.appConfigService.GetDbConfig()
+
+	fromAddr := dbConfig.SmtpFrom.Value
+	if fromAddr == "" {
+		return fmt.Errorf("SMTP from address is not configured (required for Cloudflare email)")
+	}
+
+	reqBody := cfEmailRequest{
+		To:       toEmail.Email,
+		ToName:   toEmail.Name,
+		From:     fromAddr,
+		FromName: dbConfig.AppName.Value,
+		Subject:  subject,
+		HTML:     htmlBody,
+		Text:     textBody,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal email request: %w", err)
+	}
+
+	proxyURL := common.EnvConfig.AppURL + "/__email/send"
+	req, err := http.NewRequestWithContext(ctx, "POST", proxyURL, bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("create email request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send email via Cloudflare proxy: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Cloudflare email API returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode email response: %w", err)
+	}
+	if !result.Success {
+		return fmt.Errorf("Cloudflare email API error: %s", result.Error)
 	}
 
 	return nil

@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1.7
+
+ARG BUILD_TAGS=""
+
+# Stage 1: Build Frontend
+FROM node:24-alpine AS frontend-builder
+RUN corepack enable
+
+WORKDIR /build
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY frontend/package.json ./frontend/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+  pnpm --filter pocket-id-frontend install --frozen-lockfile
+
+COPY ./frontend ./frontend/
+
+RUN --mount=type=cache,target=/build/frontend/node_modules/.vite \
+  --mount=type=cache,target=/build/frontend/.svelte-kit \
+  BUILD_OUTPUT_PATH=dist pnpm --filter pocket-id-frontend run build
+
+# Stage 2: Build Backend
+FROM golang:1.26-alpine AS backend-builder
+ARG BUILD_TAGS
+WORKDIR /build
+COPY ./backend/go.mod ./backend/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+  go mod download
+
+COPY ./backend ./
+COPY --from=frontend-builder /build/frontend/dist ./frontend/dist
+COPY .version .version
+
+WORKDIR /build/cmd
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  VERSION=$(cat /build/.version) && \
+  CGO_ENABLED=0 \
+  GOOS=linux \
+  GOARCH=amd64 \
+  go build \
+    -tags "${BUILD_TAGS}" \
+    -ldflags="-s -w -X github.com/pocket-id/pocket-id/backend/internal/common.Version=${VERSION} -buildid=${VERSION}" \
+    -trimpath \
+    -o /build/pocket-id \
+    .
+
+# Stage 3: Minimal production image
+FROM alpine:3.23.4
+WORKDIR /app
+
+RUN addgroup -g 1000 pocket-id && \
+    adduser -u 1000 -G pocket-id -D pocket-id && \
+    mkdir -p /app/data && \
+    chown -R 1000:1000 /app/data
+
+COPY --from=backend-builder /build/pocket-id /app/pocket-id
+RUN chmod +x /app/pocket-id
+
+EXPOSE 1411
+
+ENV APP_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=1411
+
+USER 1000:1000
+
+CMD ["/app/pocket-id"]

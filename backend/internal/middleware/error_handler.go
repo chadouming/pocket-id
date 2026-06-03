@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -61,6 +62,7 @@ func (m *ErrorHandlerMiddleware) Add() gin.HandlerFunc {
 				return
 			}
 
+			slog.Error("Unhandled API error", "path", c.Request.URL.Path, "error", err)
 			c.JSON(http.StatusInternalServerError, errorResponseBody{
 				Error: "Something went wrong",
 			})

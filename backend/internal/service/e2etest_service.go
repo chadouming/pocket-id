@@ -502,7 +502,7 @@ func (s *TestService) ResetDatabase() error {
 		var tables []string
 
 		switch common.EnvConfig.DbProvider {
-		case common.DbProviderSqlite:
+		case common.DbProviderSqlite, common.DbProviderD1:
 			// Query to get all tables for SQLite
 			if err := tx.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations';").Scan(&tables).Error; err != nil {
 				return err

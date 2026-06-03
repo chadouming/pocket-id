@@ -20,6 +20,7 @@ import (
 
 	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/utils"
+	d1driver "github.com/pocket-id/pocket-id/backend/internal/utils/d1"
 	sqliteutil "github.com/pocket-id/pocket-id/backend/internal/utils/sqlite"
 )
 
@@ -97,6 +98,17 @@ func ConnectDatabase() (db *gorm.DB, err error) {
 			return nil, errors.New("missing required env var 'DB_CONNECTION_STRING' for Postgres database")
 		}
 		dialector = postgres.Open(common.EnvConfig.DbConnectionString)
+	case common.DbProviderD1:
+		// Register the D1 driver with database/sql
+		proxyURL := strings.TrimPrefix(common.EnvConfig.DbConnectionString, "d1://")
+		if proxyURL == "" {
+			// Default to APP_URL if no explicit proxy URL
+			proxyURL = common.EnvConfig.AppURL
+		}
+		proxyURL = strings.TrimRight(proxyURL, "/")
+
+		sql.Register("d1", &d1driver.Driver{})
+		dialector = d1driver.Open(proxyURL)
 	default:
 		return nil, fmt.Errorf("unsupported database provider: %s", common.EnvConfig.DbProvider)
 	}

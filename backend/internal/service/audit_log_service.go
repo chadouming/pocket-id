@@ -162,7 +162,7 @@ func (s *AuditLogService) ListAllAuditLogs(ctx context.Context, listRequestOptio
 	if clientName, ok := listRequestOptions.Filters["clientName"]; ok {
 		dialect := s.db.Name()
 		switch dialect {
-		case "sqlite":
+		case "sqlite", "d1":
 			query = query.Where("json_extract(data, '$.clientName') IN ?", clientName)
 		case "postgres":
 			query = query.Where("data->>'clientName' IN ?", clientName)
@@ -230,7 +230,7 @@ func (s *AuditLogService) ListClientNames(ctx context.Context) (clientNames []st
 		Model(&model.AuditLog{})
 
 	switch dialect {
-	case "sqlite":
+	case "sqlite", "d1":
 		query = query.
 			Select("DISTINCT json_extract(data, '$.clientName') AS client_name").
 			Where("json_extract(data, '$.clientName') IS NOT NULL")
