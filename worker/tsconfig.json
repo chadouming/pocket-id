@@ -5,7 +5,7 @@
 		"jsx": "react-jsx",
 		"module": "es2022",
 		"moduleResolution": "Bundler",
-		"types": ["./worker-configuration.d.ts"],
+		"types": ["../worker-configuration.d.ts"],
 		"resolveJsonModule": true,
 		"allowJs": true,
 		"checkJs": false,
@@ -17,5 +17,5 @@
 		"skipLibCheck": true
 	},
 	"exclude": ["test"],
-	"include": ["worker-configuration.d.ts", "src/**/*.ts"]
+	"include": ["../worker-configuration.d.ts", "src/**/*.ts"]
 }

@@ -12,6 +12,7 @@ export class PocketIDContainer extends Container<Env> {
 		return {
 			APP_ENV: "production",
 			APP_URL: "https://authspot.net",
+			INTERNAL_APP_URL: "http://localhost:1411",
 			HOST: "0.0.0.0",
 			PORT: "1411",
 			DB_CONNECTION_STRING: "d1://",
@@ -145,9 +146,32 @@ function normalizeParams(params: unknown[] | undefined): unknown[] {
 	});
 }
 
+const publicConfigKeys = new Set([
+	"appName",
+	"homePageUrl",
+	"accentColor",
+	"disableAnimations",
+	"allowOwnAccountEdit",
+	"allowUserSignups",
+	"requireUserEmail",
+	"emailOneTimeAccessAsUnauthenticatedEnabled",
+	"emailOneTimeAccessAsAdminEnabled",
+	"emailVerificationEnabled",
+	"ldapEnabled",
+]);
+
 const app = new Hono<{
 	Bindings: Env;
 }>();
+
+app.get("/healthz", async (c) => {
+	try {
+		await c.env.DB.prepare("SELECT 1").first();
+		return c.json({ status: "ok" });
+	} catch {
+		return c.json({ status: "error", message: "D1 unavailable" }, 503);
+	}
+});
 
 app.get("/api/application-configuration", async (c) => {
 	try {
@@ -157,10 +181,30 @@ app.get("/api/application-configuration", async (c) => {
 		const config = Object.fromEntries(
 			result.results.map((r: Record<string, unknown>) => [r.key, r.value]),
 		);
-		return c.json(Object.keys(config).map((key) => ({
-			key,
-			type: "",
-			value: config[key] ?? "",
+		const publicVars = Object.keys(config)
+			.filter((key) => publicConfigKeys.has(key))
+			.map((key) => ({
+				key,
+				type: "",
+				value: config[key] ?? "",
+			}));
+		publicVars.push({ key: "uiConfigDisabled", type: "boolean", value: "false" });
+		return c.json(publicVars);
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/application-configuration/all", async (c) => {
+	try {
+		const result = await c.env.DB.prepare(
+			"SELECT key, value FROM app_config_variables",
+		).all();
+		const rows = result.results as Record<string, unknown>[];
+		return c.json(rows.map((r) => ({
+			key: r.key,
+			value: r.value ?? "",
+			isPublic: publicConfigKeys.has(r.key as string),
 		})));
 	} catch {
 		// Fall through to container on error
@@ -177,6 +221,47 @@ app.get("/api/application-configuration/:key", async (c) => {
 			const row = result.results[0] as Record<string, unknown>;
 			return c.json({ key: row.key, type: "", value: row.value ?? "" });
 		}
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/version/latest", async (c) => {
+	try {
+		const resp = await fetch(
+			"https://api.github.com/repos/pocket-id/pocket-id/releases/latest",
+			{ headers: { "User-Agent": "pocket-id" } },
+		);
+		if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`);
+		const payload = (await resp.json()) as { tag_name: string };
+		const version = payload.tag_name.replace(/^v/, "");
+		c.header("Cache-Control", "public, max-age=300, stale-while-revalidate=900");
+		return c.json({ latestVersion: version });
+	} catch {
+		// Fall through to container on error
+	}
+});
+
+app.get("/api/oidc/clients/:id/meta", async (c) => {
+	try {
+		const id = c.req.param("id");
+		const result = await c.env.DB.prepare(
+			"SELECT id, name, image_type, dark_image_type, launch_url, requires_reauthentication FROM oidc_clients WHERE id = ?",
+		).bind(id).first();
+		if (!result) {
+			return c.json({ error: "OIDC client not found" }, 404);
+		}
+		const r = result as Record<string, unknown>;
+		const imageType = (r.image_type as string) ?? "";
+		const darkImageType = (r.dark_image_type as string) ?? "";
+		return c.json({
+			id: r.id,
+			name: r.name ?? "",
+			hasLogo: imageType !== "",
+			hasDarkLogo: darkImageType !== "",
+			launchURL: r.launch_url ?? null,
+			requiresReauthentication: Boolean(r.requires_reauthentication),
+		});
 	} catch {
 		// Fall through to container on error
 	}
