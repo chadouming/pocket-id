@@ -9,18 +9,16 @@ export class PocketIDContainer extends Container<Env> {
 
 	private pendingRequests = 0;
 
-	get envVars() {
-		return {
-			APP_ENV: "production",
-			APP_URL: "https://authspot.net",
-			INTERNAL_APP_URL: "http://localhost:1411",
-			HOST: "0.0.0.0",
-			PORT: "1411",
-			DB_CONNECTION_STRING: "d1://",
-			ENCRYPTION_KEY: this.env.ENCRYPTION_KEY,
-			CF_EMAIL_ENABLED: "true",
-		};
-	}
+	envVars = {
+		APP_ENV: "production",
+		APP_URL: "https://authspot.net",
+		INTERNAL_APP_URL: "http://localhost:1411",
+		HOST: "0.0.0.0",
+		PORT: "1411",
+		DB_CONNECTION_STRING: "d1://",
+		ENCRYPTION_KEY: this.env.ENCRYPTION_KEY,
+		CF_EMAIL_ENABLED: "true",
+	};
 
 	override async fetch(request: Request): Promise<Response> {
 		this.pendingRequests++;
@@ -354,13 +352,9 @@ app.get("/api/oidc/clients/:id/meta", async (c) => {
 app.get("/api/users/me", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) {
-			return c.json({ error: "Not authenticated" }, 401);
-		}
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) {
-			return c.json({ error: "Invalid token" }, 401);
-		}
+		if (!auth) return;
 		const user = await c.env.DB.prepare(
 			"SELECT id, username, email, first_name, last_name, display_name, is_admin, locale, disabled, email_verified FROM users WHERE id = ?",
 		).bind(auth.sub).first();
@@ -410,9 +404,9 @@ app.get("/api/users/me", async (c) => {
 app.get("/api/webauthn/credentials", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		const result = await c.env.DB.prepare(
 			"SELECT id, name, credential_id, attestation_type, transport, backup_eligible, backup_state, created_at FROM webauthn_credentials WHERE user_id = ?",
 		).bind(auth.sub).all();
@@ -435,9 +429,9 @@ app.get("/api/webauthn/credentials", async (c) => {
 app.get("/api/oidc/users/me/authorized-clients", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		const result = await c.env.DB.prepare(
 			`SELECT uac.scope, uac.last_used_at, uac.client_id,
 				oc.id as c_id, oc.name as c_name, oc.image_type, oc.dark_image_type,
@@ -476,9 +470,9 @@ app.get("/api/oidc/users/me/authorized-clients", async (c) => {
 app.get("/api/api-keys", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		const result = await c.env.DB.prepare(
 			"SELECT id, name, description, expires_at, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
 		).bind(auth.sub).all();
@@ -520,9 +514,9 @@ app.get("/api/signup/setup", async (c) => {
 app.get("/api/custom-claims/suggestions", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const result = await c.env.DB.prepare(
 			"SELECT \"key\", COUNT(*) as count FROM custom_claims GROUP BY \"key\" ORDER BY count DESC",
 		).all();
@@ -539,9 +533,9 @@ app.get("/api/custom-claims/suggestions", async (c) => {
 app.get("/api/audit-logs/filters/users", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const result = await c.env.DB.prepare(
 			`SELECT DISTINCT u.id, u.username FROM users u
 			 INNER JOIN audit_logs al ON u.id = al.user_id
@@ -559,9 +553,9 @@ app.get("/api/audit-logs/filters/users", async (c) => {
 app.get("/api/audit-logs/filters/client-names", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const result = await c.env.DB.prepare(
 			"SELECT DISTINCT json_extract(data, '$.clientName') as name FROM audit_logs WHERE json_extract(data, '$.clientName') IS NOT NULL ORDER BY name",
 		).all();
@@ -575,9 +569,9 @@ app.get("/api/audit-logs/filters/client-names", async (c) => {
 app.get("/api/users", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const opts = parseListOptions(c.req.url);
 		const offset = (opts.page - 1) * opts.limit;
 		const where = opts.search
@@ -618,9 +612,9 @@ app.get("/api/users", async (c) => {
 app.get("/api/user-groups", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const opts = parseListOptions(c.req.url);
 		const offset = (opts.page - 1) * opts.limit;
 		const where = opts.search
@@ -663,9 +657,9 @@ app.get("/api/user-groups", async (c) => {
 app.get("/api/oidc/clients", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const opts = parseListOptions(c.req.url);
 		const offset = (opts.page - 1) * opts.limit;
 		const where = opts.search ? `WHERE oc.name LIKE ?` : "";
@@ -714,9 +708,9 @@ app.get("/api/oidc/clients", async (c) => {
 app.get("/api/oidc/clients/:id", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const id = c.req.param("id");
 		const result = await c.env.DB.prepare(
 			`SELECT oc.*,
@@ -764,9 +758,9 @@ app.get("/api/oidc/clients/:id", async (c) => {
 app.get("/api/audit-logs", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		const opts = parseListOptions(c.req.url);
 		const offset = (opts.page - 1) * opts.limit;
 		const u = new URL(c.req.url);
@@ -810,9 +804,9 @@ app.get("/api/audit-logs", async (c) => {
 app.get("/api/audit-logs/all", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const opts = parseListOptions(c.req.url);
 		const offset = (opts.page - 1) * opts.limit;
 		const u = new URL(c.req.url);
@@ -857,9 +851,9 @@ app.get("/api/audit-logs/all", async (c) => {
 app.get("/api/signup-tokens", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const result = await c.env.DB.prepare(
 			"SELECT id, created_at, token, expires_at, usage_limit, usage_count FROM signup_tokens ORDER BY created_at DESC",
 		).all();
@@ -883,9 +877,9 @@ app.get("/api/signup-tokens", async (c) => {
 app.get("/api/oidc/device/info", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		const u = new URL(c.req.url);
 		const deviceCode = u.searchParams.get("device_code");
 		if (!deviceCode) return c.json({ error: "Missing device_code" }, 400);
@@ -910,9 +904,9 @@ app.get("/api/oidc/device/info", async (c) => {
 app.get("/api/version/current", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth) return c.json({ error: "Invalid token" }, 401);
+		if (!auth) return;
 		// Read version from a D1 key-value store or return a static value
 		// The container sets this at startup; we approximate it
 		return c.json({ currentVersion: "0.0.0" });
@@ -924,9 +918,9 @@ app.get("/api/version/current", async (c) => {
 app.get("/api/users/:id", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const id = c.req.param("id");
 		const user = await c.env.DB.prepare(
 			"SELECT id, username, email, first_name, last_name, display_name, is_admin, locale, disabled, email_verified, created_at FROM users WHERE id = ?",
@@ -968,9 +962,9 @@ app.get("/api/users/:id", async (c) => {
 app.get("/api/users/:id/groups", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const id = c.req.param("id");
 		const result = await c.env.DB.prepare(
 			`SELECT ug.id, ug.friendly_name, ug.name, ug.created_at FROM user_groups ug
@@ -990,9 +984,9 @@ app.get("/api/users/:id/groups", async (c) => {
 app.get("/api/user-groups/:id", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const id = c.req.param("id");
 		const group = await c.env.DB.prepare(
 			"SELECT id, name, friendly_name, created_at FROM user_groups WHERE id = ?",
@@ -1043,9 +1037,9 @@ app.get("/api/user-groups/:id", async (c) => {
 app.get("/api/oidc/users/:id/authorized-clients", async (c) => {
 	try {
 		const token = extractAccessToken(c.req.raw);
-		if (!token) return c.json({ error: "Not authenticated" }, 401);
+		if (!token) return;
 		const auth = await verifyAccessToken(token);
-		if (!auth || !auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
+		if (!auth) return; if (!auth.isAdmin) return c.json({ error: "Forbidden" }, 403);
 		const id = c.req.param("id");
 		const result = await c.env.DB.prepare(
 			`SELECT uac.scope, uac.last_used_at, uac.client_id,
